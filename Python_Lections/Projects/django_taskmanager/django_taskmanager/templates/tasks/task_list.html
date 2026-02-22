@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Мои задачи{% endblock %}
+{% block content %}
+<h1>Мои задачи ({{ stats.total }})</h1>
+<p>Выполнено: {{ stats.done }} | Активных: {{ stats.active }} | Процент: {{ stats.completion_rate }}%</p>
+<a href="{% url 'task-create' %}">+ Новая задача</a>
+<ul>
+{% for task in tasks %}
+  <li>
+    <a href="{% url 'task-detail' task.pk %}">{{ task.title }}</a>
+    — {{ task.get_status_display }} / {{ task.get_priority_display }}
+    {% if task.is_overdue %}<strong>[ПРОСРОЧЕНА]</strong>{% endif %}
+  </li>
+{% empty %}
+  <li>Задач нет</li>
+{% endfor %}
+</ul>
+{% endblock %}

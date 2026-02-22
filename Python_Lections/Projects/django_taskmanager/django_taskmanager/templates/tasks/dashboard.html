@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Дашборд{% endblock %}
+{% block content %}
+<h1>Дашборд</h1>
+<ul>
+  <li>Всего: {{ stats.total }}</li>
+  <li>Выполнено: {{ stats.done }}</li>
+  <li>Активных: {{ stats.active }}</li>
+  <li>Процент выполнения: {{ stats.completion_rate }}%</li>
+</ul>
+{% if overdue_tasks %}
+<h2>Просроченные задачи</h2>
+<ul>
+{% for task in overdue_tasks %}
+  <li><a href="{% url 'task-detail' task.pk %}">{{ task.title }}</a> — срок: {{ task.due_date }}</li>
+{% endfor %}
+</ul>
+{% endif %}
+{% endblock %}
