@@ -879,7 +879,7 @@ cats/
 - [Справочник по классам DRF](https://www.cdrf.co/) — добавить в закладки
 
 
-###Пример написанных view-классов 
+### Пример написанных view-классов 
 ```python
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -934,3 +934,152 @@ class APIPostDetail(APIView):
         post.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 ```
+
+
+### Супер-шпора Яндекса 
+https://code.s3.yandex.net/Python-dev/cheatsheets/043-drf-serializatsija-viewset-routery-shpora/043-drf-serializatsija-viewset-routery-shpora.html
+
+### ViewSets (Наборы представлений)
+
+Высокоуровневые view-классы, реализующие все операции CRUD в одном классе.
+
+#### ModelViewSet (универсальный)
+```python
+from rest_framework import viewsets
+from .models import Cat
+from .serializers import CatSerializer
+
+class CatViewSet(viewsets.ModelViewSet):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+```
+
+**Что дает:**
+- GET (список) + POST → `/cats/`
+- GET (один объект) + PUT/PATCH/DELETE → `/cats/<int:pk>/`
+- Все 6 CRUD операций из коробки
+
+#### ReadOnlyModelViewSet (только чтение)
+```python
+class CatViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+```
+
+**Что дает:**
+- Только GET-запросы (список и один объект)
+- Без возможности создания/изменения/удаления
+
+### 2. Routers (Роутеры)
+
+Автоматически создают эндпоинты для ViewSets.
+
+#### SimpleRouter
+```python
+# urls.py
+from rest_framework.routers import SimpleRouter
+from django.urls import include, path
+from .views import CatViewSet
+
+router = SimpleRouter()
+router.register('cats', CatViewSet)  # регистрация вьюсета
+
+urlpatterns = [
+    path('', include(router.urls)),  # все эндпоинты из роутера
+]
+```
+
+**Создает эндпоинты:**
+- `cats/` → для списка и создания
+- `cats/<int:pk>/` → для одного объекта
+
+#### DefaultRouter (рекомендуемый)
+```python
+from rest_framework.routers import DefaultRouter
+
+router = DefaultRouter()
+router.register('cats', CatViewSet)
+```
+
+**Дополнительно создает:**
+- Корневой эндпоинт `/` → список всех доступных ресурсов API
+- name='api-root' для корневого эндпоинта
+
+### 3. Параметр name в эндпоинтах
+
+Роутеры автоматически создают name для эндпоинтов:
+- `'cat-list'` → для работы с коллекцией
+- `'cat-detail'` → для работы с конкретным объектом
+
+### 4. Параметр basename
+
+Нужен, когда queryset задан не явно, а через `get_queryset()`:
+
+```python
+class CommentViewSet(viewsets.ModelViewSet):
+    serializer_class = CommentSerializer
+    
+    def get_queryset(self):
+        cat_id = self.kwargs.get("cat_id")
+        return Comment.objects.filter(cat=cat_id)
+```
+
+Регистрация с обязательным basename:
+```python
+router.register('comments', CommentViewSet, basename='comment')
+```
+
+Можно переопределить basename:
+```python
+router.register('cats', CatViewSet, basename='tiger')
+# Результат: tiger-list, tiger-detail вместо cat-list, cat-detail
+```
+
+### 5. Сравнение подходов
+
+| Подход | Классы | Эндпоинты | Код |
+|--------|--------|-----------|-----|
+| **APIView** | 2 класса (List, Detail) | Прописываем вручную | Много |
+| **Generic Views** | 2 класса (List, Detail) | Прописываем вручную | Средне |
+| **ViewSet + Router** | 1 класс | Автоматически | Минимум |
+
+### 6. Полный пример с DefaultRouter
+
+**views.py:**
+```python
+from rest_framework import viewsets
+from .models import Post
+from .serializers import PostSerializer
+
+class PostViewSet(viewsets.ModelViewSet):
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+```
+
+**urls.py:**
+```python
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+from .views import PostViewSet
+
+router = DefaultRouter()
+router.register('posts', PostViewSet)
+
+urlpatterns = [
+    path('api/v1/', include(router.urls)),
+]
+```
+
+### 7. Преимущества ViewSets + Routers
+
+✅ **Минимум кода** — один класс вместо двух
+✅ **Автоматические URL** — не нужно прописывать вручную
+✅ **Стандартизация** — единый подход для всех ресурсов
+✅ **Корневой эндпоинт** (в DefaultRouter) — документация API
+✅ **Меньше ошибок** — меньше кода для написания
+
+### 8. Шпаргалка (сохранить в закладки)
+
+- [Документация DRF по ViewSets](https://www.django-rest-framework.org/api-guide/viewsets/)
+- [Документация по Routers](https://www.django-rest-framework.org/api-guide/routers/)
+- [Справочник CDRF](https://www.cdrf.co/)
