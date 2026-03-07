@@ -1488,3 +1488,808 @@ class PostSerializer(serializers.ModelSerializer):
                 TagPost.objects.create(tag=current_tag, post=post)
         return post
 ```
+
+### Дополнительные настройки сериализаторов
+### Супер-шпора Яндекса: https://code.s3.yandex.net/Python-dev/cheatsheets/044-drf-serializatory-i-validatory-dlja-svjazannyh-model/044-drf-serializatory-i-validatory-dlja-svjazannyh-model.html
+
+### 1. SerializerMethodField — вычисляемые поля
+
+Позволяет добавлять поля, которых нет в модели, вычисляя их "на лету".
+
+```python
+import datetime as dt
+from rest_framework import serializers
+
+class CatSerializer(serializers.ModelSerializer):
+    # Определяем вычисляемое поле
+    age = serializers.SerializerMethodField()
+    
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color', 'birth_year', 'age')
+    
+    # Метод для вычисления значения (get_<имя_поля>)
+    def get_age(self, obj):
+        # obj — текущий объект модели
+        return dt.datetime.now().year - obj.birth_year
+```
+
+**Особенности:**
+- Только для чтения (read-only)
+- Метод вызывается для каждого объекта
+- Не перегружать тяжелыми операциями
+- Имя метода должно быть `get_<имя_поля>`
+
+### 2. Пользовательские типы полей
+
+Создание своего типа поля для кастомной обработки данных.
+
+```python
+import webcolors
+from rest_framework import serializers
+
+class Hex2NameColor(serializers.Field):
+    # Чтение: из БД → JSON
+    def to_representation(self, value):
+        return value  # возвращаем как есть
+    
+    # Запись: из JSON → БД
+    def to_internal_value(self, data):
+        try:
+            # Конвертируем hex-код в название цвета
+            return webcolors.hex_to_name(data)
+        except ValueError:
+            raise serializers.ValidationError('Для этого цвета нет имени')
+
+# Использование в сериализаторе
+class CatSerializer(serializers.ModelSerializer):
+    color = Hex2NameColor()  # свое поле
+    
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color')
+```
+
+**Два обязательных метода:**
+| Метод | Назначение | Когда вызывается |
+|-------|------------|------------------|
+| `to_representation(self, value)` | Преобразование для ответа | GET-запросы |
+| `to_internal_value(self, data)` | Преобразование для записи | POST/PUT/PATCH |
+
+### 3. Переименование полей: параметр `source`
+
+Позволяет изменить имя поля в API, не меняя модель.
+
+```python
+class AchievementSerializer(serializers.ModelSerializer):
+    # В API поле будет achievement_name, но связано с полем name модели
+    achievement_name = serializers.CharField(source='name')
+    
+    class Meta:
+        model = Achievement
+        fields = ('id', 'achievement_name')
+```
+
+**Результат в JSON:**
+```json
+{
+    "id": 1,
+    "achievement_name": "поймал мышку"  // вместо "name"
+}
+```
+
+**Работает как для чтения, так и для записи.**
+
+### 4. Ограничение значений: ChoiceField
+
+Ограничивает возможные значения поля заданным списком.
+
+```python
+# Определяем варианты выбора
+COLOR_CHOICES = (
+    ('Gray', 'Серый'),
+    ('Black', 'Чёрный'),
+    ('White', 'Белый'),
+    ('Ginger', 'Рыжий'),
+    ('Mixed', 'Смешанный'),
+)
+
+class CatSerializer(serializers.ModelSerializer):
+    # Поле принимает только значения из списка
+    color = serializers.ChoiceField(choices=COLOR_CHOICES)
+    
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color', 'birth_year')
+```
+
+**Можно на уровне модели:**
+```python
+class Cat(models.Model):
+    color = models.CharField(
+        max_length=16, 
+        choices=COLOR_CHOICES  # ограничение в БД
+    )
+```
+
+### 5. Сравнение методов настройки полей
+
+| Метод | Назначение | Пример |
+|-------|------------|--------|
+| **SerializerMethodField** | Вычисляемые поля | `age = serializers.SerializerMethodField()` |
+| **Кастомное поле** | Своя логика преобразования | `color = Hex2NameColor()` |
+| **source** | Переименование полей | `new_name = CharField(source='old_name')` |
+| **ChoiceField** | Ограничение значений | `color = ChoiceField(choices=...)` |
+
+### 6. Полный пример (Kittygram)
+
+```python
+import datetime as dt
+import webcolors
+from rest_framework import serializers
+from .models import Cat, Achievement
+
+COLOR_CHOICES = (
+    ('Gray', 'Серый'),
+    ('Black', 'Чёрный'),
+    ('White', 'Белый'),
+    ('Ginger', 'Рыжий'),
+    ('Mixed', 'Смешанный'),
+)
+
+# Кастомное поле
+class Hex2NameColor(serializers.Field):
+    def to_representation(self, value):
+        return value
+    
+    def to_internal_value(self, data):
+        try:
+            return webcolors.hex_to_name(data)
+        except ValueError:
+            raise serializers.ValidationError('Для этого цвета нет имени')
+
+class AchievementSerializer(serializers.ModelSerializer):
+    # Переименование поля
+    achievement_name = serializers.CharField(source='name')
+    
+    class Meta:
+        model = Achievement
+        fields = ('id', 'achievement_name')
+
+class CatSerializer(serializers.ModelSerializer):
+    # Разные типы полей
+    age = serializers.SerializerMethodField()        # вычисляемое
+    color = Hex2NameColor()                          # кастомное
+    achievements = AchievementSerializer(many=True)  # вложенное
+    color_display = serializers.CharField(
+        source='get_color_display', read_only=True
+    )  # человекочитаемое значение choices
+    
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color', 'color_display', 
+                  'birth_year', 'age', 'achievements')
+    
+    def get_age(self, obj):
+        return dt.datetime.now().year - obj.birth_year
+```
+
+### 7. Шпаргалка по ситуациям
+
+| Ситуация | Решение |
+|----------|---------|
+| Нужно поле, которого нет в модели | `SerializerMethodField` |
+| Нужно преобразовать данные при записи | Кастомное поле (`to_internal_value`) |
+| Нужно преобразовать данные при чтении | Кастомное поле (`to_representation`) |
+| Нужно переименовать поле в API | `source` параметр |
+| Нужно ограничить допустимые значения | `ChoiceField` или `choices` в модели |
+| Нужно получить display value для choices | `source='get_<field>_display'` |
+
+### 8. Полезные ссылки
+
+- [Документация DRF по полям](https://www.django-rest-framework.org/api-guide/fields/)
+- [Кастомные поля](https://www.django-rest-framework.org/api-guide/fields/#custom-fields)
+- [SerializerMethodField](https://www.django-rest-framework.org/api-guide/fields/#serializermethodfield)
+
+
+### Регулярные выражения (RegExp)
+### Супер-шпора Яндекса: https://code.s3.yandex.net/Python-dev/cheatsheets/045-reguljarnye-vyrazhenija-shpora/045-reguljarnye-vyrazhenija-shpora.html
+
+### 1. Что такое регулярные выражения
+
+**Регулярные выражения** — это язык для поиска строк и проверки их на соответствие шаблону.
+
+- **Pattern (шаблон/маска)** — строка-образец, определяющая правило поиска
+- Позволяют находить строки по сложным критериям
+- Широко используются в валидации данных (email, телефон, пароль)
+
+### 2. Два типа символов в регулярных выражениях
+
+| Тип | Описание | Пример |
+|-----|----------|--------|
+| **Спецсимволы** | Имеют специальное значение в шаблоне | `.` означает "любой символ" |
+| **Обычные символы** | Должны точно совпадать в строке | `@` должен быть в email |
+
+**Экранирование:** Чтобы использовать спецсимвол как обычный, ставят перед ним обратный слеш `\`
+- `\.` — означает именно точку, а не "любой символ"
+
+### 3. Пример: поиск email в доменах Yandex
+
+```regex
+^[\w.\-]{1,25}@(yandex\.ru|yandex\.ua|yandex\.by|yandex\.com)$
+```
+
+**Разбор шаблона:**
+
+| Часть | Значение |
+|-------|----------|
+| `^` | Начало строки |
+| `[\w.\-]` | Набор символов: буквы, цифры, _, точка, дефис |
+| `{1,25}` | Длина от 1 до 25 символов |
+| `@` | Символ @ (должен быть точно) |
+| `(yandex\.ru\|yandex\.ua)` | Варианты доменов через `\|` (или) |
+| `$` | Конец строки |
+
+### 4. Основные спецсимволы
+
+| Символ | Значение |
+|--------|----------|
+| `.` | Любой символ (кроме новой строки) |
+| `^` | Начало строки |
+| `$` | Конец строки |
+| `*` | 0 или более повторений |
+| `+` | 1 или более повторений |
+| `?` | 0 или 1 повторение |
+| `{n}` | Ровно n повторений |
+| `{n,}` | n или более повторений |
+| `{n,m}` | От n до m повторений |
+| `\|` | Или (выбор между вариантами) |
+| `(...)` | Группировка |
+| `[...]` | Набор символов (любой из перечисленных) |
+| `[^...]` | Любой символ, кроме перечисленных |
+
+### 5. Метасимволы (группы символов)
+
+| Метасимвол | Значение | Эквивалент |
+|------------|----------|------------|
+| `\d` | Любая цифра | `[0-9]` |
+| `\D` | Любой не-цифровой символ | `[^0-9]` |
+| `\w` | Буква, цифра или подчеркивание | `[a-zA-Z0-9_]` |
+| `\W` | Любой кроме букв, цифр, _ | `[^a-zA-Z0-9_]` |
+| `\s` | Пробельный символ | пробел, табуляция, перевод строки |
+| `\S` | Непробельный символ | |
+
+### 6. Примеры регулярных выражений
+
+| Что ищем | Регулярное выражение | Пояснение |
+|----------|---------------------|-----------|
+| Email | `^[\w.+-]+@[\w-]+\.[a-z]{2,}$` | Локальная часть@домен.зона |
+| Телефон | `^\+7\d{10}$` | +7 и 10 цифр |
+| Только буквы | `^[a-zA-Zа-яА-Я]+$` | Только буквы (лат/кир) |
+| IP-адрес | `^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$` | Четыре числа через точку |
+| Дата (ГГГГ-ММ-ДД) | `^\d{4}-\d{2}-\d{2}$` | 2024-01-01 |
+
+### 7. Использование в Django/DRF
+
+**Валидация поля в сериализаторе:**
+```python
+from rest_framework import serializers
+import re
+
+class UserSerializer(serializers.ModelSerializer):
+    email = serializers.EmailField()
+    phone = serializers.CharField()
+    
+    def validate_phone(self, value):
+        # Проверка телефона через регулярное выражение
+        pattern = r'^\+7\d{10}$'
+        if not re.match(pattern, value):
+            raise serializers.ValidationError(
+                'Телефон должен быть в формате +7XXXXXXXXXX'
+            )
+        return value
+```
+
+**Валидация в моделях:**
+```python
+from django.db import models
+from django.core.validators import RegexValidator
+
+class User(models.Model):
+    phone = models.CharField(
+        max_length=12,
+        validators=[
+            RegexValidator(
+                regex=r'^\+7\d{10}$',
+                message='Телефон должен быть в формате +7XXXXXXXXXX'
+            )
+        ]
+    )
+```
+
+### 8. Полезные ресурсы
+
+- **Тестирование regex:** [regex101.com](https://regex101.com/) (выбрать Python flavor)
+- **Документация Python:** [re — Regular expressions](https://docs.python.org/3/library/re.html)
+- **Шпаргалка:** [Regex Cheat Sheet](https://www.debuggex.com/cheatsheet/regex/python)
+
+### 9. Советы для новичков
+
+1. **Начинай с простого:** сначала проверь простые совпадения, потом усложняй
+2. **Используй онлайн-тестеры:** видишь сразу, что находит шаблон
+3. **Экранируй спецсимволы:** если нужна точка, пиши `\.`
+4. **Комментируй сложные regex:** в следующем месяце сам не вспомнишь, что означает твой шаблон
+5. **Не усложняй:** часто простое решение лучше сложного regex
+
+### 10. Пример с email из истории про Kittygram
+
+```python
+import re
+
+# Шаблон для поиска email на доменах yandex
+pattern = r'^[\w.\-]{1,25}@(yandex\.ru|yandex\.ua|yandex\.by|yandex\.com)$'
+
+emails = [
+    'ivan@yandex.ru',
+    'petr@yandex.com',
+    'test@gmail.com',
+    'very_long_email_address_12345@yandex.ru'  # 26 символов - не подойдет
+]
+
+for email in emails:
+    if re.match(pattern, email):
+        print(f"Найден: {email}")
+
+# Результат:
+# Найден: ivan@yandex.ru
+# Найден: petr@yandex.com
+```
+
+
+### Расширенные возможности вьюсетов
+
+### 1. Стандартные действия (actions) во вьюсетах
+
+| Действие | HTTP метод | URL | Назначение |
+|----------|-----------|-----|------------|
+| `create` | POST | `/cats/` | Создание объекта |
+| `list` | GET | `/cats/` | Список объектов |
+| `retrieve` | GET | `/cats/{id}/` | Получение одного объекта |
+| `update` | PUT | `/cats/{id}/` | Полное обновление |
+| `partial_update` | PATCH | `/cats/{id}/` | Частичное обновление |
+| `destroy` | DELETE | `/cats/{id}/` | Удаление объекта |
+
+### 2. Нестандартные действия: декоратор @action
+
+Позволяет добавить кастомные методы во вьюсет.
+
+```python
+from rest_framework.decorators import action
+from rest_framework.response import Response
+
+class CatViewSet(viewsets.ModelViewSet):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+    
+    # Кастомное действие: список из 5 белых котиков
+    @action(detail=False, url_path='recent-white-cats')
+    def recent_white_cats(self, request):
+        cats = Cat.objects.filter(color='White')[:5]
+        serializer = self.get_serializer(cats, many=True)
+        return Response(serializer.data)
+```
+
+**Параметры декоратора @action:**
+
+| Параметр | Описание | Пример |
+|----------|----------|--------|
+| `detail` | Работа с одним объектом (True) или коллекцией (False) | `detail=False` |
+| `methods` | Разрешенные HTTP методы | `methods=['get', 'post']` |
+| `url_path` | Кастомный URL (по умолчанию = имя метода) | `url_path='recent-white'` |
+
+**Сгенерированный URL:** `/cats/recent-white-cats/`
+
+### 3. Разные сериализаторы для одного вьюсета
+
+Использование разных сериализаторов в зависимости от действия.
+
+```python
+class CatListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color')  # только основные поля
+
+class CatViewSet(viewsets.ModelViewSet):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer  # по умолчанию
+    
+    def get_serializer_class(self):
+        # Для списка используем облегченный сериализатор
+        if self.action == 'list':
+            return CatListSerializer
+        # Для остальных действий - полный
+        return CatSerializer
+```
+
+### 4. Миксины: сборка вьюсета под свои задачи
+
+Миксины позволяют собрать вьюсет с любым набором действий.
+
+**Предустановленные миксины:**
+
+| Миксин | Действие | HTTP методы |
+|--------|----------|-------------|
+| `CreateModelMixin` | Создание | POST |
+| `ListModelMixin` | Список | GET |
+| `RetrieveModelMixin` | Один объект | GET |
+| `UpdateModelMixin` | Обновление | PUT, PATCH |
+| `DestroyModelMixin` | Удаление | DELETE |
+
+**Пример: вьюсет только для создания и получения**
+```python
+from rest_framework import mixins, viewsets
+
+class CreateRetrieveViewSet(mixins.CreateModelMixin,
+                            mixins.RetrieveModelMixin,
+                            viewsets.GenericViewSet):
+    pass  # ничего писать не нужно!
+
+# Использование
+class LightCatViewSet(CreateRetrieveViewSet):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+```
+
+**Результат:**
+- ✅ `POST /mycats/` — создать котика
+- ✅ `GET /mycats/{id}/` — получить котика
+- ❌ `GET /mycats/` — список (не работает)
+- ❌ `PUT /mycats/{id}/` — обновление (не работает)
+
+### 5. Регулярные выражения в роутерах
+
+При регистрации вьюсета можно использовать regex для сложных URL.
+
+```python
+router.register(r'profile/(?P<username>[\w.@+-]+)/', UserViewSet)
+# Будет обрабатывать:
+# /profile/ivan/
+# /profile/ivan.ivanov/
+# /profile/user@example/
+```
+
+**r-строки** (raw strings) — строки с префиксом `r`, в которых escape-последовательности игнорируются.
+
+### 6. Низкоуровневый ViewSet (наследование от ViewSet)
+
+Для полного контроля можно наследоваться от `viewsets.ViewSet` и реализовать методы вручную.
+
+```python
+from rest_framework import viewsets
+from rest_framework.response import Response
+from django.shortcuts import get_object_or_404
+
+class CatViewSet(viewsets.ViewSet):
+    def list(self, request):
+        queryset = Cat.objects.all()
+        serializer = CatSerializer(queryset, many=True)
+        return Response(serializer.data)
+    
+    def retrieve(self, request, pk=None):
+        queryset = Cat.objects.all()
+        cat = get_object_or_404(queryset, pk=pk)
+        serializer = CatSerializer(cat)
+        return Response(serializer.data)
+    
+    # Можно реализовать и другие методы:
+    # create(), update(), partial_update(), destroy()
+```
+
+**Доступные методы для переопределения:**
+- `list(self, request)`
+- `create(self, request)`
+- `retrieve(self, request, pk=None)`
+- `update(self, request, pk=None)`
+- `partial_update(self, request, pk=None)`
+- `destroy(self, request, pk=None)`
+
+### 7. Иерархия классов в DRF
+
+```
+APIView
+    └── GenericAPIView
+        ├── GenericViewSet
+        │   ├── ReadOnlyModelViewSet (list + retrieve)
+        │   ├── ModelViewSet (все CRUD)
+        │   └── Кастомные вьюсеты через миксины
+        └── Mixins (Create, List, Retrieve, Update, Destroy)
+```
+
+### 8. Сравнение подходов
+
+| Подход | Гибкость | Код | Когда использовать |
+|--------|----------|-----|-------------------|
+| **ModelViewSet** | Низкая | Минимум | Стандартный CRUD |
+| **ReadOnlyModelViewSet** | Низкая | Минимум | Только чтение |
+| **Миксины** | Средняя | Мало | Нужен определенный набор действий |
+| **ViewSet** | Высокая | Много | Полный контроль, нестандартная логика |
+| **@action** | Средняя | Средне | Добавить одно-два кастомных действия |
+
+### 9. Полезные приемы
+
+**Доступ к текущему действию:**
+```python
+def my_method(self, request):
+    if self.action == 'list':
+        # делаем одно
+    elif self.action == 'retrieve':
+        # делаем другое
+```
+
+**Кастомное действие с POST:**
+```python
+@action(detail=True, methods=['post'])
+def set_color(self, request, pk=None):
+    cat = self.get_object()
+    cat.color = request.data.get('color')
+    cat.save()
+    return Response({'status': 'color updated'})
+```
+
+**URL:**
+- `/cats/{id}/set_color/` — POST запрос для смены цвета
+
+### 10. Шпаргалка
+
+| Ситуация | Решение |
+|----------|---------|
+| Нужно кастомное действие | `@action(detail=False)` |
+| Разные сериализаторы для разных запросов | `get_serializer_class()` |
+| Нужен вьюсет только с create и retrieve | Миксины `CreateModelMixin` + `RetrieveModelMixin` |
+| Нужен полный контроль над методами | Наследование от `ViewSet` |
+| Сложные URL-шаблоны | Регулярные выражения в `router.register()` |
+
+### JWT + Djoser аутентификация
+
+### 1. Принципы аутентификации в REST API
+
+**Stateless (отсутствие состояния)** — каждый запрос независим, сервер не хранит информацию о предыдущих запросах.
+
+**Аутентификация по токенам:**
+- Клиент получает токен один раз (по логину/паролю)
+- При каждом запросе отправляет токен в заголовке
+- Токен содержит всю информацию о пользователе
+
+### 2. Встроенная аутентификация DRF: Authtoken
+
+```python
+# settings.py
+INSTALLED_APPS = [
+    ...
+    'rest_framework.authtoken',  # добавляем
+]
+
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',  # доступ только авторизованным
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+    ]
+}
+
+# urls.py
+from rest_framework.authtoken import views
+
+urlpatterns = [
+    path('api-token-auth/', views.obtain_auth_token),  # получение токена
+]
+```
+
+**Использование:**
+```bash
+# Получить токен
+POST /api-token-auth/
+{
+    "username": "user",
+    "password": "pass"
+}
+
+# Ответ:
+{
+    "token": "9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b"
+}
+
+# Запрос с токеном
+GET /api/v1/posts/
+Authorization: Token 9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b
+```
+
+### 3. JWT (JSON Web Token) — преимущества
+
+**Структура JWT:**
+```
+Header.Payload.Signature
+```
+
+**Header (заголовок):**
+```json
+{
+  "alg": "HS256",      // алгоритм подписи
+  "typ": "JWT"         // тип токена
+}
+```
+
+**Payload (полезная нагрузка):**
+```json
+{
+  "token_type": "access",
+  "exp": 1578171903,   // срок действия
+  "user_id": 5         // данные пользователя
+}
+```
+
+**Signature (подпись):** гарантирует, что токен не был изменен
+
+**Преимущества JWT:**
+- Не нужно обращаться к БД при каждом запросе
+- Вся информация уже в токене
+- Можно проверить срок действия
+
+### 4. Установка и настройка Djoser + Simple JWT
+
+```bash
+pip install djoser djangorestframework-simplejwt==4.7.2
+```
+
+```python
+# settings.py
+INSTALLED_APPS = [
+    'django.contrib.auth',
+    ...
+    'rest_framework',
+    'djoser',  # после rest_framework
+]
+
+from datetime import timedelta
+
+REST_FRAMEWORK = {
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework_simplejwt.authentication.JWTAuthentication',
+    ],
+}
+
+SIMPLE_JWT = {
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),  # срок жизни токена
+    'AUTH_HEADER_TYPES': ('Bearer',),  # тип заголовка
+}
+
+# urls.py
+urlpatterns = [
+    path('auth/', include('djoser.urls')),        # управление пользователями
+    path('auth/', include('djoser.urls.jwt')),    # JWT эндпоинты
+]
+```
+
+### 5. Эндпоинты Djoser
+
+| Эндпоинт | Метод | Назначение |
+|----------|-------|------------|
+| `/auth/users/` | POST | Создать пользователя |
+| `/auth/users/me/` | GET | Информация о текущем пользователе |
+| `/auth/jwt/create/` | POST | Получить JWT токен |
+| `/auth/jwt/refresh/` | POST | Обновить токен |
+| `/auth/users/reset_password/` | POST | Сброс пароля |
+
+### 6. Работа с JWT
+
+**Создание пользователя:**
+```bash
+POST /auth/users/
+{
+    "username": "newuser",
+    "password": "securepass123"
+}
+# Ответ: 201 Created
+```
+
+**Получение токена:**
+```bash
+POST /auth/jwt/create/
+{
+    "username": "newuser",
+    "password": "securepass123"
+}
+
+# Ответ:
+{
+    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...",
+    "access": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+}
+```
+
+**Использование токена:**
+```bash
+GET /api/v1/posts/
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+```
+
+**Обновление токена:**
+```bash
+POST /auth/jwt/refresh/
+{
+    "refresh": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9..."
+}
+
+# Новый access-токен
+{
+    "access": "новый_токен..."
+}
+```
+
+### 7. Кастомизация Djoser
+
+**Переопределение сериализатора:**
+```python
+from djoser.serializers import UserSerializer
+
+class CustomUserSerializer(UserSerializer):
+    class Meta:
+        model = User
+        fields = ('email', 'id', 'username', 'first_name', 'last_name')
+```
+
+**Переопределение вьюсета:**
+```python
+from djoser.views import UserViewSet
+from .serializers import CustomUserSerializer
+
+class CustomUserViewSet(UserViewSet):
+    serializer_class = CustomUserSerializer
+```
+
+### 8. Типы токенов
+
+| Токен | Назначение | Срок жизни |
+|-------|------------|------------|
+| **access** | Основной токен для доступа к API | Короткий (день/час) |
+| **refresh** | Для получения нового access токена | Длинный (неделя/месяц) |
+
+### 9. Заголовки авторизации
+
+**Authtoken:**
+```
+Authorization: Token 9944b09199c62bcf9418ad846dd0e4bbdfc6ee4b
+```
+
+**JWT:**
+```
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+```
+
+### 10. Обработка ошибок
+
+| Ситуация | Статус | Ответ |
+|----------|--------|-------|
+| Нет токена | 401 | `{"detail": "Учетные данные не предоставлены"}` |
+| Недействительный токен | 401 | `{"detail": "Invalid token"}` |
+| Истек токен | 401 | `{"detail": "Token expired"}` |
+
+### 11. Сравнение методов
+
+| Характеристика | Authtoken | JWT |
+|----------------|-----------|-----|
+| Хранение данных | В БД | В токене |
+| Запросы к БД | При каждом запросе | Только при получении токена |
+| Масштабирование | Сложнее | Легче |
+| Срок действия | Бесконечный (до отзыва) | Настраиваемый |
+| Доп. библиотеки | Встроен в DRF | Simple JWT + Djoser |
+
+### 12. Полезные ссылки
+
+- [Документация Djoser](https://djoser.readthedocs.io/)
+- [Документация Simple JWT](https://django-rest-framework-simplejwt.readthedocs.io/)
+- [JWT.io](https://jwt.io/) — декодирование и проверка токенов
