@@ -934,7 +934,27 @@ class APIPostDetail(APIView):
         post.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 ```
+### С дженериками 
+```python
+#  Импортируйте в код всё необходимое
+from .models import Post
+from .serializers import PostSerializer
+from rest_framework import generics
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+from django.shortcuts import get_object_or_404
 
+
+class APIPostList(generics.ListCreateAPIView):
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+
+
+class APIPostDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Post.objects.all()
+    serializer_class = PostSerializer
+```
 
 ### Супер-шпора Яндекса 
 https://code.s3.yandex.net/Python-dev/cheatsheets/043-drf-serializatsija-viewset-routery-shpora/043-drf-serializatsija-viewset-routery-shpora.html
@@ -1083,3 +1103,200 @@ urlpatterns = [
 - [Документация DRF по ViewSets](https://www.django-rest-framework.org/api-guide/viewsets/)
 - [Документация по Routers](https://www.django-rest-framework.org/api-guide/routers/)
 - [Справочник CDRF](https://www.cdrf.co/)
+
+
+### Сериализаторы для связанных моделей
+
+### 1. Связи между моделями
+
+```python
+# models.py
+class Owner(models.Model):
+    first_name = models.CharField(max_length=128)
+    last_name = models.CharField(max_length=128)
+
+class Cat(models.Model):
+    name = models.CharField(max_length=16)
+    color = models.CharField(max_length=16)
+    birth_year = models.IntegerField()
+    # Связь "один-ко-многим" (ForeignKey)
+    owner = models.ForeignKey(
+        Owner, related_name='cats', on_delete=models.CASCADE)
+    # Связь "многие-ко-многим" (ManyToManyField)
+    achievements = models.ManyToManyField(Achievement, through='AchievementCat')
+```
+
+### 2. Базовые сериализаторы
+
+```python
+# serializers.py
+class OwnerSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Owner
+        fields = ('first_name', 'last_name')
+
+class CatSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color', 'birth_year')
+```
+
+### 3. Типы полей для связанных моделей
+
+#### PrimaryKeyRelatedField (по умолчанию)
+```python
+# В ответе будут id связанных объектов
+[
+    {
+        "first_name": "Theodor",
+        "last_name": "Voland",
+        "cats": [1, 2]  # id котиков
+    }
+]
+```
+
+#### StringRelatedField (строковое представление)
+```python
+class OwnerSerializer(serializers.ModelSerializer):
+    cats = serializers.StringRelatedField(many=True, read_only=True)
+    
+    class Meta:
+        model = Owner
+        fields = ('first_name', 'last_name', 'cats')
+
+# Результат: вместо id - строковое представление (из __str__)
+{
+    "first_name": "Theodor",
+    "last_name": "Voland",
+    "cats": ["Барсик", "Мурзик"]  # name из __str__
+}
+```
+
+**Важно:**
+- `many=True` — для связи "один-ко-многим" (у одного хозяина много котов)
+- `read_only=True` — StringRelatedField не поддерживает запись
+
+### 4. Вложенные сериализаторы
+
+Для получения полных объектов связанной модели, а не только id или строк:
+
+```python
+class AchievementSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Achievement
+        fields = ('id', 'name')
+
+class CatSerializer(serializers.ModelSerializer):
+    # Вложенный сериализатор
+    achievements = AchievementSerializer(many=True, read_only=True)
+    owner = serializers.StringRelatedField(read_only=True)
+    
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color', 'birth_year', 'owner', 'achievements')
+```
+
+**Результат:**
+```json
+{
+    "id": 1,
+    "name": "Барсик",
+    "color": "White",
+    "birth_year": 2017,
+    "owner": "Theodor Voland",
+    "achievements": [
+        {"id": 1, "name": "поймал мышку"},
+        {"id": 2, "name": "разбил вазу"}
+    ]
+}
+```
+
+### 5. Запись данных с вложенными сериализаторами
+
+По умолчанию вложенные сериализаторы **только для чтения**. Чтобы разрешить запись, нужно:
+1. Убрать `read_only=True`
+2. Переопределить метод `create()` или `update()`
+
+```python
+class CatSerializer(serializers.ModelSerializer):
+    achievements = AchievementSerializer(many=True, required=False)  # read_only убран
+    
+    class Meta:
+        model = Cat
+        fields = ('id', 'name', 'color', 'birth_year', 'owner', 'achievements')
+    
+    def create(self, validated_data):
+        # Проверяем, есть ли достижения в запросе
+        if 'achievements' not in self.initial_data:
+            # Создаем котика без достижений
+            return Cat.objects.create(**validated_data)
+        
+        # Извлекаем достижения из данных
+        achievements = validated_data.pop('achievements')
+        
+        # Создаем котика
+        cat = Cat.objects.create(**validated_data)
+        
+        # Обрабатываем каждое достижение
+        for achievement in achievements:
+            # get_or_create - получить существующее или создать новое
+            current_achievement, _ = Achievement.objects.get_or_create(
+                **achievement)
+            # Создаем связь в промежуточной таблице
+            AchievementCat.objects.create(
+                achievement=current_achievement, cat=cat)
+        
+        return cat
+```
+
+### 6. Необязательные поля
+
+Чтобы поле было необязательным, используйте `required=False`:
+
+```python
+class CatSerializer(serializers.ModelSerializer):
+    achievements = AchievementSerializer(many=True, required=False)
+```
+
+### 7. Доступ к исходным данным запроса
+
+`self.initial_data` содержит原始 данные запроса (до валидации):
+
+```python
+def create(self, validated_data):
+    # Проверяем, было ли поле в исходном запросе
+    if 'achievements' not in self.initial_data:
+        # Поле отсутствовало в запросе
+        cat = Cat.objects.create(**validated_data)
+        return cat
+    # Поле было в запросе (возможно, пустое)
+    achievements = validated_data.pop('achievements')
+    # ... обработка достижений
+```
+
+### 8. Порядок работы при создании связанных объектов
+
+1. Извлечь связанные данные из `validated_data`
+2. Создать основной объект
+3. Обработать каждый связанный объект:
+   - Найти существующий или создать новый
+   - Создать связи в промежуточных таблицах
+4. Вернуть созданный объект
+
+### 9. Важные параметры полей
+
+| Параметр | Назначение |
+|----------|------------|
+| `many=True` | Для связей "один-ко-многим" и "многие-ко-многим" |
+| `read_only=True` | Поле только для чтения (не участвует в записи) |
+| `required=False` | Поле необязательное в запросе |
+
+### 10. Шпаргалка по типам related-полей
+
+| Тип поля | Описание |
+|----------|----------|
+| `PrimaryKeyRelatedField` | Возвращает/принимает id связанных объектов (по умолчанию) |
+| `StringRelatedField` | Возвращает строковое представление (`__str__`) |
+| `SlugRelatedField` | Возвращает/принимает значение указанного поля (slug) |
+| `HyperlinkedRelatedField` | Возвращает ссылку на связанный объект |
+| Вложенный сериализатор | Возвращает полный объект (JSON) |
