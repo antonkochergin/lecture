@@ -1,4 +1,131 @@
-## Краткий конспект: Проектирование REST API
+View-классы API
+Следующий этап работы с Views в Django REST framework — встроенные view-классы. У них множество преимуществ перед view-функциями:
+
+    возможность применять готовый код для решения стандартных задач;
+    наследование, которое позволяет повторно использовать уже написанный код.
+
+Встроенные классы DRF можно условно разделить на низкоуровневые и высокоуровневые. Низкоуровневые содержат лишь базовую структуру класса, его скелет, разработчик сам должен описать работу класса. Их применяют для решения нестандартных задач.
+Типовые задачи (скажем, CRUD) удобнее решать с помощью высокоуровневых view-классов: в них уже заготовлены все инструменты для решения стандартных задач.
+Низкоуровневые view-классы в DRF
+Начнём с низкоуровневого view-класса APIView из модуля rest_framework.views. 
+Если view-класс унаследован от класса APIView, то при получении GET-запроса в классе будет вызван метод get(), а при получении POST-запроса — метод post(). Такие методы описаны для всех типов запросов, но по умолчанию эти методы не выполняют никаких действий, их нужно описывать самостоятельно.
+
+# Скелет есть, а кода нет. Надо самостоятельно описать необходимые методы.
+class MyAPIView(APIView):
+    def get(self, request):
+        ...
+
+    def post(self, request):
+        ...
+
+    def put(self, request):
+        ...
+
+    def patch(self, request):
+        ...
+
+    def delete(self, request):
+        ... 
+
+В целом этот класс работает так же, как и view-функции. 
+Практика: редактируем вместе
+Измените проект Kittygram: вместо view-функции опишите view-класс.
+Импортируйте класс APIView из rest_framework.views, создайте класс-наследник и переопределите в нём методы get() и post(). Код почти ничем не будет отличаться от того, что был во view-функции, но будет написан в объектно-ориентированном стиле.
+
+# Обновлённый views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+from .models import Cat
+from .serializers import CatSerializer
+
+
+class APICat(APIView):
+    def get(self, request):
+        cats = Cat.objects.all()
+        serializer = CatSerializer(cats, many=True)
+        return Response(serializer.data)
+
+    def post(self, request):
+        serializer = CatSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED) 
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST) 
+
+Чтобы всё заработало, исправьте код в urls.py, ведь синтаксис вызова view-классов отличается от синтаксиса вызова view-функций.
+
+# urls.py
+from django.urls import path
+
+from cats.views import APICat
+
+urlpatterns = [
+    path('cats/', APICat.as_view()),
+] 
+
+Как и при работе со view-функциями, все операции CRUD при использовании view-классов принято разделять на 2 группы: в одном view-классе описывается создание нового объекта и запрос всех объектов (например класс APICat), а в другом классе — получение/изменение/удаление определённого объекта (например класс APICatDetail).
+Внесите изменения в Kittygram, запустите проект и поработайте с запросами через Postman: API будет работать так же, как и со view-функциями.
+Generic Views: высокоуровневые view-классы
+Для типовых действий, например, для вывода списка объектов или для запроса объекта по id удобнее использовать высокоуровневые view-классы, «дженерики» (англ. Generic Views): в них уже реализованы все механизмы, необходимые для решения задачи.
+Некоторые из Generic Views выполняют строго определённую задачу (например, обрабатывают только один тип запросов), другие — более универсальны и могут «переключаться» на разные задачи в зависимости от HTTP-метода, которым был отправлен запрос. 
+В дженериках задают всего два поля: queryset (набор записей, который будет обрабатываться в классе) и serializer_class (сериализатор, который будет преобразовывать объекты в формат JSON). В DRF все Generic Views объединены в модуле rest_framework.generics. Полный список можно посмотреть в документации DRF.
+Рефакторинг кода: пишем Kittygram на Generic Views
+Операции, описанные во view-классе проекта Kittygram, типичны для любого API. Есть смысл переписать код, заменив низкоуровневый view-класс на дженерики.
+Для работы возьмём два класса и на них реализуем все шесть операций классического API:
+
+    комбинированный класс ListCreateAPIView: он возвращает всю коллекцию объектов (например, всех котиков) или может создать новую запись в БД;
+    комбинированный класс RetrieveUpdateDestroyAPIView: его работа — возвращать, обновлять или удалять объекты модели по одному.
+
+    Это практическая работа: вносите изменения, описанные в этом уроке, в проект Kittygram, развёрнутый на вашем компьютере.
+
+Импортируйте в код всё необходимое: generics из rest_framework, модель и сериализатор. Затем опишите дженерики:
+
+# Обновлённый views.py
+from rest_framework import generics
+
+from .models import Cat
+from .serializers import CatSerializer
+
+
+class CatList(generics.ListCreateAPIView):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+
+
+class CatDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer 
+
+Измените вызов view-класса в urls.py:
+
+# Обновлённый urls.py
+from django.urls import path
+
+from cats.views import CatList, CatDetail
+
+urlpatterns = [
+    path('cats/', CatList.as_view()),
+    path('cats/<int:pk>/', CatDetail.as_view()),
+] 
+
+Теперь проект Kittygram поддерживает весь API CRUD для модели Cat (а не только получение списка всех котиков и добавление нового котика). При минимальном количестве изменений в коде мы сделали API для модели Cat в Kittygram! Да и кода стало меньше. А где меньше кода, там меньше ошибок.
+В коде явным образом не описана обработка разных типов запросов: всё происходит «под капотом» view-классов. Внесите изменения в свой локальный проект Kittygram и отправьте запросы разного типа через Postman: убедитесь в работоспособности проекта.
+Специализированные Generic Views
+В коде Kittygram view-классы унаследованы от комбинированных дженериков: они выполняют все операции CRUD. Для решения нашей задачи именно комбинированные дженерики подходят лучше всего. Но в некоторых случаях применение комбинированных view-классов будет избыточным или даже опасным. 
+Например, при создании API «только для чтения» (как знакомый вам StarWarsAPI) лучше подключить специализированный ListAPIView, который выполняет ровно одно действие: выводит список объектов в ответ на GET-запрос. Это лучше и с точки зрения безопасности, и с точки зрения отсутствия избыточного кода.
+Есть ещё несколько специализированных view-классов DRF:
+
+    RetrieveAPIView — возвращает один объект (обрабатывает только GET-запросы);
+    CreateAPIView — создаёт новый объект (обрабатывает только POST-запросы);
+    UpdateAPIView — изменяет объект (обрабатывает только PUT- и PATCH-запросы);
+    DestroyAPIView — удаляет объект (обрабатывает только DELETE-запросы).
+
+Эти классы описываются в коде точно так же, как и комбинированные view-классы модуля rest_framework.generics.
+Что в итоге
+Работа с view-классами в DRF отличается от работы с привычными view-классами в Django только сериализацией и отсутствием HTML-шаблонов.
+Удобная шпаргалка по классам DRF. Добавьте эту страницу в закладки и заглядывайте туда регулярно: с каждым разом этот справочник будет становиться всё понятнее и полезнее.## Краткий конспект: Проектирование REST API
 
 Проектирование API — это фундамент, влияющий на удобство и долговечность сервиса. Два главных принципа: **консистентность** и **расширяемость**.
 
@@ -631,3 +758,122 @@ def api_posts_detail(request, pk):
         post.delete()
         return Response(status=status.HTTP_204_NO_CONTENT)
 ```
+
+## Краткий конспект: View-классы в DRF
+
+### 1. Преимущества view-классов перед view-функциями
+
+- **Готовый код** для стандартных задач
+- **Наследование** — повторное использование кода
+- Разделение на низкоуровневые и высокоуровневые классы
+
+### 2. Низкоуровневые view-классы: APIView
+
+Базовый класс из `rest_framework.views`. Требует ручной реализации методов.
+
+```python
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import status
+
+class APICat(APIView):
+    def get(self, request):
+        cats = Cat.objects.all()
+        serializer = CatSerializer(cats, many=True)
+        return Response(serializer.data)
+    
+    def post(self, request):
+        serializer = CatSerializer(data=request.data)
+        if serializer.is_valid():
+            serializer.save()
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+```
+
+**Маршрутизация:**
+```python
+urlpatterns = [
+    path('cats/', APICat.as_view()),  # .as_view() обязательно для классов
+]
+```
+
+**Важно:** Для CRUD обычно используют два класса:
+- Один для списка и создания (`GET` всех объектов + `POST`)
+- Второй для работы с конкретным объектом (`GET`, `PUT`, `PATCH`, `DELETE`)
+
+### 3. Высокоуровневые view-классы (Generic Views)
+
+Находятся в модуле `rest_framework.generics`. Требуют определения всего двух полей:
+- `queryset` — набор записей для обработки
+- `serializer_class` — сериализатор для преобразования
+
+#### Комбинированные дженерики (CRUD)
+
+```python
+from rest_framework import generics
+
+class CatList(generics.ListCreateAPIView):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+
+class CatDetail(generics.RetrieveUpdateDestroyAPIView):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+```
+
+**Маршрутизация:**
+```python
+urlpatterns = [
+    path('cats/', CatList.as_view()),
+    path('cats/<int:pk>/', CatDetail.as_view()),
+]
+```
+
+**Что дают эти классы:**
+- `ListCreateAPIView` → `GET` (список) + `POST` (создание)
+- `RetrieveUpdateDestroyAPIView` → `GET` (один объект) + `PUT`/`PATCH` + `DELETE`
+
+### 4. Специализированные Generic Views
+
+Для задач, где не нужен полный CRUD:
+
+| Класс | HTTP-методы | Назначение |
+|-------|-------------|------------|
+| `ListAPIView` | `GET` | Только список объектов |
+| `RetrieveAPIView` | `GET` | Только один объект |
+| `CreateAPIView` | `POST` | Только создание |
+| `UpdateAPIView` | `PUT`, `PATCH` | Только обновление |
+| `DestroyAPIView` | `DELETE` | Только удаление |
+
+**Пример для read-only API:**
+```python
+class CatReadOnlyList(generics.ListAPIView):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+
+class CatReadOnlyDetail(generics.RetrieveAPIView):
+    queryset = Cat.objects.all()
+    serializer_class = CatSerializer
+```
+
+### 5. Структура проекта после рефакторинга
+
+```
+cats/
+├── models.py          # Модель Cat
+├── serializers.py     # CatSerializer
+├── views.py           # View-классы (APIView или generics)
+└── urls.py            # Маршруты с .as_view()
+```
+
+### 6. Ключевые отличия от обычных Django views
+
+- Вместо HTML-шаблонов — **сериализация** в JSON
+- Вместо `render()` — возврат `Response()` или `JsonResponse()`
+- Встроенная поддержка всех HTTP-методов
+- Минимум кода для типовых операций
+
+### 7. Полезные ссылки
+
+- [Документация DRF по Generic Views](https://www.django-rest-framework.org/api-guide/generic-views/)
+- [Справочник по классам DRF](https://www.cdrf.co/) — добавить в закладки
