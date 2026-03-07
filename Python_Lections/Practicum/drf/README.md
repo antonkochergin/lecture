@@ -1440,3 +1440,51 @@ POST /api/v1/posts/
 - ✅ **Минимум кода** — максимум функциональности
 - ✅ **Гибкость** — опциональные поля
 - ✅ **Автоматические URL** — роутер всё создает сам
+
+
+### Условие:
+Добавьте к постам хештеги. Хештеги должны храниться в отдельной таблице в БД и быть связаны с постами отношением «многие-ко-многим».
+При запросе постов должна возвращаться информация о всех связанных с конкретным постом хештегах, а при добавлении или обновлении поста нужно обеспечить возможность передавать названия хештегов списком прямо в теле запроса. Без указания хештегов пост через API тоже должен создаваться.
+Пример POST-запроса для создания поста с хештегами:
+
+{
+    "text": "Текст для моего поста",
+    "author": 1,
+    "tag": [
+        {"name": "хобби"},
+        {"name": "личное"}
+        ]
+} 
+### Код:
+```python
+from rest_framework import serializers
+
+from .models import Group, Post, Tag, TagPost
+
+
+class TagSerializer(serializers.ModelSerializer):
+    class Meta:
+        fields = ('name',)
+        model = Tag
+
+
+class PostSerializer(serializers.ModelSerializer):
+    group = serializers.SlugRelatedField(slug_field='slug', queryset=Group.objects.all(), required=False)
+    tag = TagSerializer(many=True, required=False)
+
+    class Meta:
+        fields = ('id', 'text', 'author', 'image', 'pub_date', 'group', 'tag', )
+        model = Post
+
+    def create(self, validated_data):
+        if 'tag' not in self.initial_data:
+            post = Post.objects.create(**validated_data)
+            return post
+        else:
+            tags = validated_data.pop('tag')
+            post = Post.objects.create(**validated_data)
+            for tag in tags:
+                current_tag, status = Tag.objects.get_or_create(**tag)
+                TagPost.objects.create(tag=current_tag, post=post)
+        return post
+```
